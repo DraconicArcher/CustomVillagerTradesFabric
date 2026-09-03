@@ -714,7 +714,7 @@ public class ConfigHandler {
 								3
 						),
 						new EnchantmentEntry(
-								List.of("minecraft:sweeping"),
+								List.of("minecraft:sweeping_edge"),
 								1,
 								2
 						)

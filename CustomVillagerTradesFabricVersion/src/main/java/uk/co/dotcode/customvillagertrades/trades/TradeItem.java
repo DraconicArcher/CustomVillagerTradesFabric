@@ -3,7 +3,6 @@ package uk.co.dotcode.customvillagertrades.trades;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.effect.MobEffect;
@@ -16,21 +15,25 @@ import net.minecraft.world.item.alchemy.PotionContents;
 import net.minecraft.world.item.component.DyedItemColor;
 import net.minecraft.world.item.component.SuspiciousStewEffects;
 import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.network.chat.Component;
 
+import net.minecraft.core.component.DataComponents;
+
 import uk.co.dotcode.customvillagertrades.ModLogger;
-import uk.co.dotcode.customvillagertrades.TradeUtil;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Random;
 
 public class TradeItem {
 
     public String itemKey;
+
     public int amount = 1;
+
     public Integer priceModifier;
+
     public String name;
 
     public String advancedNBTData;
@@ -38,19 +41,28 @@ public class TradeItem {
     private Holder<Item> itemHolder;
 
     private Integer amountRange;
+
     private Integer priceModifierAdditional;
 
-    private List<EnchantmentEntry> enchantments = new ArrayList<>();
-    private List<String> blacklist = new ArrayList<>();
+    private List<EnchantmentEntry> enchantments =
+            new ArrayList<>();
+
+    private List<String> blacklist =
+            new ArrayList<>();
 
     private Object metadata;
+
     private Integer r;
+
     private Integer g;
+
     private Integer b;
 
-    private List<MyTradeEffect> effects = new ArrayList<>();
+    private List<MyTradeEffect> effects =
+            new ArrayList<>();
 
-    private static final Random RANDOM = new Random();
+    private static final Random RANDOM =
+            new Random();
 
     private record EffectData(
             Holder<MobEffect> effect,
@@ -60,44 +72,55 @@ public class TradeItem {
     ) {
     }
 
-
     /**
      * Resolves the configured item against the server registry.
      */
     public void resolve(RegistryAccess access) {
 
-        if (itemHolder != null || itemKey == null) {
+        if (itemHolder != null
+                || itemKey == null) {
             return;
         }
 
         ResourceLocation id =
-                ResourceLocation.tryParse(itemKey);
+                ResourceLocation.tryParse(
+                        itemKey
+                );
 
         if (id == null) {
+
             ModLogger.error(
-                    "Invalid item identifier: " + itemKey
+                    "Invalid item identifier: "
+                            + itemKey
             );
+
             return;
         }
 
         Registry<Item> registry =
-                access.registryOrThrow(Registries.ITEM);
+                access.registryOrThrow(
+                        Registries.ITEM
+                );
 
         itemHolder =
-                registry.getHolder(id).orElse(null);
+                registry.getHolder(id)
+                        .orElse(null);
 
         if (itemHolder == null) {
+
             ModLogger.error(
-                    "Failed to resolve item: " + itemKey
+                    "Failed to resolve item: "
+                            + itemKey
             );
         }
     }
 
-
     /**
      * Creates the configured ItemStack.
      */
-    public ItemStack createItemStack(Entity entity) {
+    public ItemStack createItemStack(
+            Entity entity
+    ) {
 
         RegistryAccess access =
                 entity.level().registryAccess();
@@ -117,7 +140,9 @@ public class TradeItem {
                 );
 
         /*
+         * ---------------------------------------------------------
          * Potion / stew effects.
+         * ---------------------------------------------------------
          */
         List<MobEffectInstance> normalized =
                 getEffects();
@@ -129,66 +154,126 @@ public class TradeItem {
                     || stack.is(Items.LINGERING_POTION)
                     || stack.is(Items.TIPPED_ARROW)) {
 
-                applyPotion(stack, normalized);
+                applyPotion(
+                        stack,
+                        normalized
+                );
 
-            } else if (stack.is(Items.SUSPICIOUS_STEW)) {
+            } else if (stack.is(
+                    Items.SUSPICIOUS_STEW
+            )) {
 
-                applyStew(stack, normalized);
+                applyStew(
+                        stack,
+                        normalized
+                );
             }
         }
 
-
-
-
         /*
+         * ---------------------------------------------------------
          * Enchantments.
+         * ---------------------------------------------------------
          *
-         * We leave the actual enchantment component handling
-         * to EnchantmentResolver once its current implementation
-         * is converted to the same mappings.
+         * IMPORTANT:
+         *
+         * We process EVERY EnchantmentEntry in the configuration.
+         *
+         * Previously the code selected ONE random entry:
+         *
+         *     enchantments.get(RANDOM.nextInt(...))
+         *
+         * which meant a trade containing:
+         *
+         *     Knockback
+         *     Sharpness
+         *
+         * could only ever receive one of them.
+         *
+         * EnchantmentHelper.updateEnchantments() handles the
+         * correct component automatically:
+         *
+         *     normal item  -> ENCHANTMENTS
+         *     enchanted book -> STORED_ENCHANTMENTS
+         *
+         * It also preserves enchantments already present on the
+         * stack, allowing multiple configured enchantments.
          */
         if (enchantments != null
                 && !enchantments.isEmpty()) {
 
-            EnchantmentEntry entry =
-                    enchantments.get(
-                            RANDOM.nextInt(
-                                    enchantments.size()
-                            )
-                    );
+            for (EnchantmentEntry entry :
+                    enchantments) {
 
-            EnchantmentResolver.EnchResult result =
-                    EnchantmentResolver.resolve(
-                            entry,
-                            itemKey,
-                            blacklist
-                    );
+                if (entry == null) {
+                    continue;
+                }
 
-            if (result != null) {
+                EnchantmentResolver.EnchResult result =
+                        EnchantmentResolver.resolve(
+                                entry,
+                                itemKey,
+                                blacklist,
+                                access
+                        );
+
+                if (result == null) {
+                    continue;
+                }
+
+                Holder<Enchantment> enchantment =
+                        result.enchantment();
+
+                int level =
+                        result.level();
+
                 /*
-                 * Intentionally left here until EnchantmentResolver
-                 * is converted to Mojang 1.21.1 mappings.
+                 * EnchantmentHelper determines whether this stack
+                 * should use ENCHANTMENTS or STORED_ENCHANTMENTS.
+                 *
+                 * This is what makes the same code work for:
+                 *
+                 *     diamond sword
+                 *     netherite axe
+                 *     wooden sword
+                 *     enchanted book
+                 *
+                 * without manually manipulating the data
+                 * components.
                  */
+                EnchantmentHelper.updateEnchantments(
+                        stack,
+                        mutable ->
+                                mutable.set(
+                                        enchantment,
+                                        level
+                                )
+                );
             }
         }
 
-
         /*
+         * ---------------------------------------------------------
          * Custom name.
+         * ---------------------------------------------------------
          */
-        if (name != null && !name.isBlank()) {
+        if (name != null
+                && !name.isBlank()) {
 
             stack.set(
-                    net.minecraft.core.component.DataComponents.CUSTOM_NAME,
+                    DataComponents.CUSTOM_NAME,
                     Component.literal(name)
             );
         }
 
-
         /*
+         * ---------------------------------------------------------
          * Dyed item color.
+         * ---------------------------------------------------------
          */
-        if (r != null && g != null && b != null) {
+        if (r != null
+                && g != null
+                && b != null) {
 
             int color =
                     (r << 16)
@@ -196,28 +281,34 @@ public class TradeItem {
                             | b;
 
             stack.set(
-                    net.minecraft.core.component.DataComponents.DYED_COLOR,
-                    new DyedItemColor(color, false)
+                    DataComponents.DYED_COLOR,
+                    new DyedItemColor(
+                            color,
+                            false
+                    )
             );
         }
 
         return stack;
     }
 
-
     /**
-     * Converts configured effects into registry-backed effects.
+     * Converts configured effects into
+     * registry-backed effects.
      */
     private List<MobEffectInstance> getEffects() {
 
-        if (effects == null || effects.isEmpty()) {
+        if (effects == null
+                || effects.isEmpty()) {
+
             return List.of();
         }
 
         List<MobEffectInstance> result =
                 new ArrayList<>();
 
-        for (MyTradeEffect effect : effects) {
+        for (MyTradeEffect effect :
+                effects) {
 
             if (effect == null) {
                 continue;
@@ -234,33 +325,32 @@ public class TradeItem {
         return result;
     }
 
-
-
-
     /**
-     * Applies effects to a potion using the 1.21 component system.
+     * Applies effects to a potion using the
+     * 1.21 component system.
      */
     private void applyPotion(
             ItemStack stack,
             List<MobEffectInstance> effects
     ) {
-        PotionContents contents = PotionContents.EMPTY;
 
-        for (MobEffectInstance effect : effects) {
-            contents = contents.withEffectAdded(effect);
+        PotionContents contents =
+                PotionContents.EMPTY;
+
+        for (MobEffectInstance effect :
+                effects) {
+
+            contents =
+                    contents.withEffectAdded(
+                            effect
+                    );
         }
 
         stack.set(
-                net.minecraft.core.component.DataComponents.POTION_CONTENTS,
+                DataComponents.POTION_CONTENTS,
                 contents
         );
     }
-
-
-
-
-
-
 
     /**
      * Applies effects to suspicious stew.
@@ -269,10 +359,13 @@ public class TradeItem {
             ItemStack stack,
             List<MobEffectInstance> effects
     ) {
-        List<SuspiciousStewEffects.Entry> stewEffects =
+
+        List<SuspiciousStewEffects.Entry>
+                stewEffects =
                 new ArrayList<>();
 
-        for (MobEffectInstance effect : effects) {
+        for (MobEffectInstance effect :
+                effects) {
 
             stewEffects.add(
                     new SuspiciousStewEffects.Entry(
@@ -283,54 +376,52 @@ public class TradeItem {
         }
 
         stack.set(
-                net.minecraft.core.component.DataComponents.SUSPICIOUS_STEW_EFFECTS,
-                new SuspiciousStewEffects(stewEffects)
+                DataComponents.SUSPICIOUS_STEW_EFFECTS,
+                new SuspiciousStewEffects(
+                        stewEffects
+                )
         );
     }
 
-
-
-
-
-
-
-    public void setItemKey(String itemKey) {
+    public void setItemKey(
+            String itemKey
+    ) {
         this.itemKey = itemKey;
     }
 
-
-    public void setAmount(int amount) {
+    public void setAmount(
+            int amount
+    ) {
         this.amount = amount;
     }
-
 
     public void setPriceModifier(
             Integer priceModifier
     ) {
-        this.priceModifier = priceModifier;
+        this.priceModifier =
+                priceModifier;
     }
-
 
     public void setEnchantments(
             List<EnchantmentEntry> enchantments
     ) {
-        this.enchantments = enchantments;
+        this.enchantments =
+                enchantments;
     }
-
 
     public void setBlacklist(
             List<String> blacklist
     ) {
-        this.blacklist = blacklist;
+        this.blacklist =
+                blacklist;
     }
-
 
     public void setEffects(
             List<MyTradeEffect> effects
     ) {
-        this.effects = effects;
+        this.effects =
+                effects;
     }
-
 
     public int getAmount() {
 
@@ -345,7 +436,6 @@ public class TradeItem {
 
         return amount;
     }
-
 
     public boolean validate(
             String prof,
